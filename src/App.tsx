@@ -11,7 +11,7 @@ import './index.css';
 
 // ─── Direct fetch SSE streaming (no SDK — avoids baseURL issues) ──────────────
 async function* streamCompletion(messages: { role: string; content: string }[]) {
-  const response = await fetch('/api/proxy/chat/completions', {
+  const response = await fetch('/api/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

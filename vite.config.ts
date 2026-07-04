@@ -67,10 +67,10 @@ export default defineConfig({
   ],
   server: {
     proxy: {
-      '/api/proxy': {
+      '/api/chat': {
         target: 'https://integrate.api.nvidia.com/v1',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/proxy/, ''),
+        rewrite: () => '/chat/completions',
       },
     },
   },
