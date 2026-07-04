@@ -300,10 +300,13 @@ export default function App() {
                           <ReactMarkdown
                             remarkPlugins={[remarkGfm]}
                             components={{
+                              // Render p as div to avoid <pre> inside <p> invalid nesting
+                              p: ({ node, children, ...props }: any) => <div className="md-p" {...props}>{children}</div>,
+                              pre: ({ node, ...props }: any) => <pre {...props} />,
                               code({ node, inline, className, children, ...props }: any) {
                                 return inline
                                   ? <code className={className} {...props}>{children}</code>
-                                  : <pre><code className={className} {...props}>{children}</code></pre>;
+                                  : <code className={className} {...props}>{children}</code>;
                               },
                             }}
                           >

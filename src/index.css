@@ -466,8 +466,8 @@ textarea { font-family: inherit; }
 }
 
 /* Markdown */
-.bot-text p { margin-bottom: 10px; }
-.bot-text p:last-child { margin-bottom: 0; }
+.bot-text p, .bot-text .md-p { margin-bottom: 10px; }
+.bot-text p:last-child, .bot-text .md-p:last-child { margin-bottom: 0; }
 .bot-text h1,.bot-text h2,.bot-text h3 { font-weight: 600; margin: 12px 0 6px; color: var(--text-1); }
 .bot-text a { color: #60a5fa; text-decoration: underline; }
 .bot-text ul,.bot-text ol { margin: 6px 0 10px 20px; }
