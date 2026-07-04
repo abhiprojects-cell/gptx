@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import OpenAI from 'openai';
 import {
   Plus, Trash2, Edit3, ImageIcon, Search,
   LayoutGrid, Clock, Grid3x3, MoreHorizontal, Library,
@@ -10,20 +9,61 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './index.css';
 
-const openai = new OpenAI({
-  apiKey: 'placeholder', // key is injected server-side by the Edge Function
-  baseURL: '/api/proxy',
-  dangerouslyAllowBrowser: true,
-});
+// ─── Direct fetch SSE streaming (no SDK — avoids baseURL issues) ──────────────
+async function* streamCompletion(messages: { role: string; content: string }[]) {
+  const response = await fetch('/api/proxy/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'z-ai/glm-5.2',
+      messages,
+      temperature: 0.85,
+      top_p: 1,
+      max_tokens: 16384,
+      seed: 42,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`API error ${response.status}: ${err}`);
+  }
+
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') return;
+      try {
+        const json = JSON.parse(data);
+        const content = json.choices?.[0]?.delta?.content;
+        if (content) yield content as string;
+      } catch { /* skip malformed chunks */ }
+    }
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface Message { role: 'user' | 'assistant'; content: string; }
 interface ChatSession { id: string; title: string; messages: Message[]; updatedAt: number; }
 
 const isMobile = () => window.innerWidth <= 768;
-
-function makeSession(): ChatSession {
-  return { id: Date.now().toString(), title: 'New chat', messages: [], updatedAt: Date.now() };
-}
+const makeSession = (): ChatSession => ({
+  id: Date.now().toString(), title: 'New chat', messages: [], updatedAt: Date.now(),
+});
 
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -32,7 +72,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile());
   const [ready, setReady] = useState(false);
-
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -62,13 +101,11 @@ export default function App() {
   const activeSession = sessions.find(s => s.id === activeId);
   const messages = activeSession?.messages ?? [];
 
-  /* ── Helpers ── */
   const scrollBottom = useCallback(() => {
     requestAnimationFrame(() => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     });
   }, []);
-
   useEffect(scrollBottom, [messages, scrollBottom]);
 
   const resizeTextarea = () => {
@@ -94,11 +131,7 @@ export default function App() {
     e.stopPropagation();
     setSessions(p => {
       const next = p.filter(s => s.id !== id);
-      if (!next.length) {
-        const s = makeSession();
-        setActiveId(s.id);
-        return [s];
-      }
+      if (!next.length) { const s = makeSession(); setActiveId(s.id); return [s]; }
       if (activeId === id) setActiveId(next[0].id);
       return next;
     });
@@ -119,32 +152,18 @@ export default function App() {
       ? msg.slice(0, 32) + (msg.length > 32 ? '…' : '')
       : (activeSession?.title ?? 'Chat');
 
+    // Append user message + placeholder
     setSessions(p => p.map(s =>
-      s.id === activeId ? { ...s, messages: withUser, title, updatedAt: Date.now() } : s
+      s.id === activeId
+        ? { ...s, messages: [...withUser, { role: 'assistant', content: '' }], title, updatedAt: Date.now() }
+        : s
     ));
     setLoading(true);
 
-    // optimistic placeholder
-    setSessions(p => p.map(s =>
-      s.id === activeId
-        ? { ...s, messages: [...withUser, { role: 'assistant', content: '' }] }
-        : s
-    ));
-
     try {
-      const stream = await openai.chat.completions.create({
-        model: 'z-ai/glm-5.2',
-        messages: withUser.map(m => ({ role: m.role, content: m.content })),
-        temperature: 0.85,
-        top_p: 1,
-        max_tokens: 16384,
-        seed: 42,
-        stream: true,
-      });
-
       let full = '';
-      for await (const chunk of stream) {
-        full += chunk.choices[0]?.delta?.content ?? '';
+      for await (const chunk of streamCompletion(withUser)) {
+        full += chunk;
         const captured = full;
         setSessions(p => p.map(s => {
           if (s.id !== activeId) return s;
@@ -153,11 +172,12 @@ export default function App() {
           return { ...s, messages: msgs, updatedAt: Date.now() };
         }));
       }
-    } catch {
+    } catch (err) {
+      console.error(err);
       setSessions(p => p.map(s => {
         if (s.id !== activeId) return s;
         const msgs = [...s.messages];
-        msgs[msgs.length - 1] = { role: 'assistant', content: '⚠️ Something went wrong. Please try again.' };
+        msgs[msgs.length - 1] = { role: 'assistant', content: `⚠️ Error: ${(err as Error).message}` };
         return { ...s, messages: msgs };
       }));
     } finally {
@@ -176,7 +196,6 @@ export default function App() {
 
   return (
     <div className="app-container">
-      {/* Mobile overlay */}
       <div
         className={`sidebar-overlay ${sidebarOpen && isMobile() ? 'visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
@@ -186,14 +205,10 @@ export default function App() {
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <button className="sidebar-logo-btn">
-            <div className="logo-mark">
-              <img src="/aj.svg" alt="AJ" width={30} height={30} />
-            </div>
+            <div className="logo-mark"><img src="/aj.svg" alt="AJ" width={30} height={30} /></div>
             <span>Mini ChatGPT</span>
           </button>
-          <button className="icon-btn" onClick={() => setSidebarOpen(false)} title="Close sidebar">
-            <PanelLeftClose size={18} />
-          </button>
+          <button className="icon-btn" onClick={() => setSidebarOpen(false)}><PanelLeftClose size={18} /></button>
         </div>
 
         <nav className="sidebar-nav">
@@ -208,34 +223,25 @@ export default function App() {
 
         <div className="recents-header">Recents</div>
         <div className="chat-list">
-          {[...sessions]
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .map(s => (
-              <div
-                key={s.id}
-                className={`chat-item ${activeId === s.id ? 'active' : ''}`}
-                onClick={() => selectChat(s.id)}
-              >
-                <span className="chat-item-title">{s.title}</span>
-                <button className="chat-item-del" onClick={e => deleteChat(s.id, e)} title="Delete">
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            ))}
+          {[...sessions].sort((a, b) => b.updatedAt - a.updatedAt).map(s => (
+            <div
+              key={s.id}
+              className={`chat-item ${activeId === s.id ? 'active' : ''}`}
+              onClick={() => selectChat(s.id)}
+            >
+              <span className="chat-item-title">{s.title}</span>
+              <button className="chat-item-del" onClick={e => deleteChat(s.id, e)}><Trash2 size={13} /></button>
+            </div>
+          ))}
         </div>
       </aside>
 
       {/* ═══ MAIN ═══ */}
       <main className="main-content">
-        {/* Top bar */}
         <div className="topbar">
           <div className="topbar-left">
-            <button className="icon-btn" onClick={() => setSidebarOpen(v => !v)} title="Toggle sidebar">
-              <PanelLeft size={18} />
-            </button>
-            <button className="model-badge">
-              Mini ChatGPT <ChevronDown size={14} color="var(--text-3)" />
-            </button>
+            <button className="icon-btn" onClick={() => setSidebarOpen(v => !v)}><PanelLeft size={18} /></button>
+            <button className="model-badge">Mini ChatGPT <ChevronDown size={14} color="var(--text-3)" /></button>
           </div>
           <div className="topbar-right">
             <div className="logo-mark" style={{ width: 32, height: 32, borderRadius: 8 }}>
@@ -244,14 +250,11 @@ export default function App() {
           </div>
         </div>
 
-        {/* Scrollable area */}
         <div className="chat-scroll" ref={scrollRef}>
           {isEmptyChat ? (
-            /* ── Empty state ── */
             <div className="empty-state">
               <p className="empty-greeting">Ready when you are.</p>
               <div className="input-wrap-empty">
-                {/* Composer inlined – no sub-component, so textarea never remounts */}
                 <div className="composer">
                   <textarea
                     ref={textareaRef}
@@ -266,34 +269,22 @@ export default function App() {
                   />
                   <div className="composer-footer">
                     <div className="composer-actions-left">
-                      <button className="composer-btn" title="Attach"><Plus size={18} /></button>
-                      <button className="composer-btn" title="Voice"><Mic size={18} /></button>
+                      <button className="composer-btn"><Plus size={18} /></button>
+                      <button className="composer-btn"><Mic size={18} /></button>
                     </div>
-                    <button
-                      className={`send-btn ${input.trim() ? 'active' : ''}`}
-                      onClick={() => send()}
-                      title="Send"
-                    >
+                    <button className={`send-btn ${input.trim() ? 'active' : ''}`} onClick={() => send()}>
                       {input.trim() ? <ArrowUp size={18} /> : <AudioLines size={17} />}
                     </button>
                   </div>
                 </div>
-
                 <div className="suggestions">
-                  <button className="sug-btn" onClick={() => send('Create an image for me')}>
-                    <ImageIcon size={14} /> Create image
-                  </button>
-                  <button className="sug-btn" onClick={() => send('Help me write something')}>
-                    <Edit3 size={14} /> Write or edit
-                  </button>
-                  <button className="sug-btn" onClick={() => send('Look something up for me')}>
-                    <Globe size={14} /> Look something up
-                  </button>
+                  <button className="sug-btn" onClick={() => send('Create an image for me')}><ImageIcon size={14} /> Create image</button>
+                  <button className="sug-btn" onClick={() => send('Help me write something')}><Edit3 size={14} /> Write or edit</button>
+                  <button className="sug-btn" onClick={() => send('Look something up for me')}><Globe size={14} /> Look something up</button>
                 </div>
               </div>
             </div>
           ) : (
-            /* ── Messages ── */
             <div className="messages-wrap">
               {messages.map((msg, i) => (
                 <div key={i} className={`msg-row ${msg.role === 'user' ? 'user' : 'bot'}`}>
@@ -301,9 +292,7 @@ export default function App() {
                     <div className="user-bubble">{msg.content}</div>
                   ) : (
                     <div className="bot-inner">
-                      <div className="bot-avatar">
-                        <img src="/aj.svg" alt="AJ" width={28} height={28} />
-                      </div>
+                      <div className="bot-avatar"><img src="/aj.svg" alt="AJ" width={28} height={28} /></div>
                       <div className="bot-text">
                         {msg.content === '' && loading && i === messages.length - 1 ? (
                           <div className="typing-dots"><span /><span /><span /></div>
@@ -330,7 +319,6 @@ export default function App() {
           )}
         </div>
 
-        {/* ── Fixed composer (active chat) ── */}
         {!isEmptyChat && (
           <div className="composer-fixed-wrap">
             <div style={{ width: '100%', maxWidth: '720px' }}>
@@ -347,14 +335,10 @@ export default function App() {
                 />
                 <div className="composer-footer">
                   <div className="composer-actions-left">
-                    <button className="composer-btn" title="Attach"><Plus size={18} /></button>
-                    <button className="composer-btn" title="Voice"><Mic size={18} /></button>
+                    <button className="composer-btn"><Plus size={18} /></button>
+                    <button className="composer-btn"><Mic size={18} /></button>
                   </div>
-                  <button
-                    className={`send-btn ${input.trim() ? 'active' : ''}`}
-                    onClick={() => send()}
-                    title="Send"
-                  >
+                  <button className={`send-btn ${input.trim() ? 'active' : ''}`} onClick={() => send()}>
                     {input.trim() ? <ArrowUp size={18} /> : <AudioLines size={17} />}
                   </button>
                 </div>
