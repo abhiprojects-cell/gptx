@@ -13,7 +13,10 @@ import './index.css';
 async function* streamCompletion(messages: { role: string; content: string }[]) {
   const response = await fetch('/api/proxy/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer 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',
+    },
     body: JSON.stringify({
       model: 'z-ai/glm-5.2',
       messages,
