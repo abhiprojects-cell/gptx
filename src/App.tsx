@@ -12,7 +12,7 @@ import './index.css';
 
 const openai = new OpenAI({
   apiKey: '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',
-  baseURL: window.location.origin + '/api/nvidia',
+  baseURL: 'https://integrate.api.nvidia.com/v1',
   dangerouslyAllowBrowser: true,
 });
 
