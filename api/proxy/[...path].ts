@@ -5,45 +5,61 @@ const API_KEY = 'nvapi-yuiEeU894IQ47aiadOaWbYFgSlrnWMSPOuQ6GM9kaXMoYmzrlzVCPMXsr
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age': '86400',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
 };
 
 export default async function handler(req: Request) {
-  // Handle preflight
+  // Preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS });
   }
 
-  const url = new URL(req.url);
-  // strip /api/proxy prefix to get the actual NVIDIA path
-  const path = url.pathname.replace(/^\/api\/proxy/, '');
-  const targetUrl = `${NVIDIA_BASE}${path}${url.search}`;
+  try {
+    const url = new URL(req.url);
+    // Strip /api/proxy prefix → get real NVIDIA path
+    const path = url.pathname.replace(/^\/api\/proxy/, '') || '/';
+    const targetUrl = `${NVIDIA_BASE}${path}`;
 
-  const init: RequestInit = {
-    method: req.method,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${API_KEY}`,
-    },
-  };
+    // Read body as text to avoid ReadableStream piping issues
+    const bodyText = (req.method !== 'GET' && req.method !== 'HEAD')
+      ? await req.text()
+      : undefined;
 
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    init.body = req.body;
-    // @ts-ignore — needed for streaming body in Edge
-    init.duplex = 'half';
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`,
+        'Accept': 'text/event-stream',
+      },
+      body: bodyText,
+    });
+
+    if (!upstream.ok) {
+      const errText = await upstream.text();
+      console.error(`NVIDIA API error ${upstream.status}:`, errText);
+      return new Response(
+        JSON.stringify({ error: `NVIDIA API error ${upstream.status}: ${errText}` }),
+        { status: upstream.status, headers: { ...CORS, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Stream the SSE response back to the browser
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        ...CORS,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  } catch (err) {
+    console.error('Proxy error:', err);
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } }
+    );
   }
-
-  const upstream = await fetch(targetUrl, init);
-
-  // Forward upstream headers and add CORS headers
-  const resHeaders = new Headers(upstream.headers);
-  Object.entries(CORS).forEach(([k, v]) => resHeaders.set(k, v));
-
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: resHeaders,
-  });
 }
