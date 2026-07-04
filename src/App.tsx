@@ -11,8 +11,8 @@ import remarkGfm from 'remark-gfm';
 import './index.css';
 
 const openai = new OpenAI({
-  apiKey: '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',
-  baseURL: '/api/nvidia',
+  apiKey: 'placeholder', // key is injected server-side by the Edge Function
+  baseURL: '/api/proxy',
   dangerouslyAllowBrowser: true,
 });
 
