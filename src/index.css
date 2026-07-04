@@ -219,10 +219,9 @@ textarea { font-family: inherit; }
 .chat-item:hover .chat-item-del { opacity: 1; }
 .chat-item-del:hover { background: rgba(239,68,68,0.15); color: #ef4444; }
 
-/* Always show delete on touch devices */
-@media (hover: none) {
-  .chat-item-del { opacity: 0.5; }
-  .chat-item.active .chat-item-del { opacity: 0.7; }
+/* Always show delete on mobile — no hover available */
+@media (max-width: 768px) {
+  .chat-item-del { opacity: 1 !important; color: var(--text-3); }
 }
 
 /* ===== MAIN CONTENT ===== */
